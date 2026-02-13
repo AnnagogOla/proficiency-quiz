@@ -2,12 +2,13 @@ using Microsoft.Data.Sqlite;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Render sets PORT. Make sure Kestrel listens correctly.
-builder.WebHost.UseUrls($"http://0.0.0.0:{Environment.GetEnvironmentVariable("PORT") ?? "8080"}");
+// Render provides PORT. Listen on it.
+var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
+builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 
 var app = builder.Build();
 
-// ---------- CORS (allow your Vercel frontend) ----------
+// ---------- CORS ----------
 var allowedOrigin = Environment.GetEnvironmentVariable("FRONTEND_ORIGIN") ?? "*";
 app.Use(async (ctx, next) =>
 {
@@ -22,7 +23,7 @@ app.Use(async (ctx, next) =>
     await next();
 });
 
-// ---------- Database (SQLite) ----------
+// ---------- SQLite ----------
 var dbPath = Path.Combine(app.Environment.ContentRootPath, "data.db");
 var connString = new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
 
@@ -69,8 +70,9 @@ int CountQuestions()
 
 void SeedFromCsvIfEmpty()
 {
-    // Seed from /questions.csv at repo root (Render deploy includes it)
-    var csvPath = Path.Combine(app.Environment.ContentRootPath, "..", "questions.csv");
+    // If your questions.csv is repo root, it won't be inside api/ at runtime.
+    // Easiest: copy questions.csv into api/ as well.
+    var csvPath = Path.Combine(app.Environment.ContentRootPath, "questions.csv");
     if (!File.Exists(csvPath)) return;
     if (CountQuestions() > 0) return;
 
@@ -93,7 +95,7 @@ void SeedFromCsvIfEmpty()
         var d = parts[4].Trim();
 
         if (!int.TryParse(parts[5].Trim(), out var correctFromFile)) continue;
-        var correctIndex = correctFromFile - 1; // CSV is 1-4; backend uses 0-3
+        var correctIndex = correctFromFile - 1; // CSV 1-4 -> DB 0-3
         if (correctIndex < 0 || correctIndex > 3) continue;
 
         using var cmd = con.CreateCommand();
@@ -133,7 +135,7 @@ record QuestionDto(long Id, string Text, string[] Options, int CorrectIndex);
 record CreateQuestion(string Text, string[] Options, int CorrectIndex);
 record GradeRequest(int Score, int Total);
 
-// ---------- API ----------
+// ---------- Endpoints ----------
 app.MapGet("/health", () => Results.Ok(new { ok = true }));
 
 app.MapGet("/api/questions", () =>
@@ -155,7 +157,6 @@ app.MapGet("/api/questions", () =>
     return Results.Json(list);
 });
 
-// Admin: create question
 app.MapPost("/api/questions", async (HttpRequest req) =>
 {
     var body = await req.ReadFromJsonAsync<CreateQuestion>();
@@ -182,7 +183,6 @@ app.MapPost("/api/questions", async (HttpRequest req) =>
     return Results.Json(new { id });
 });
 
-// Admin: delete question
 app.MapDelete("/api/questions/{id:long}", (long id) =>
 {
     using var con = Open();
@@ -193,7 +193,6 @@ app.MapDelete("/api/questions/{id:long}", (long id) =>
     return rows > 0 ? Results.Ok() : Results.NotFound();
 });
 
-// Grade + save result
 app.MapPost("/api/grade", async (HttpRequest req) =>
 {
     var body = await req.ReadFromJsonAsync<GradeRequest>();
